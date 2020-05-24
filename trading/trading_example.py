@@ -1,6 +1,6 @@
 import argparse
 import sys
-from trading.loopring_rest_sample import LoopringRestApiSample
+from loopring_rest_sample import LoopringRestApiSample
 from time import sleep
 
 loopring_exported_account = {

@@ -2,16 +2,8 @@
 REST API Sample for Loopring Crypto Exchange.
 """
 import hashlib
-import hmac
 import json
-from copy import copy
-from datetime import datetime, timedelta
 from enum import Enum
-from threading import Lock
-from operator import itemgetter
-from random import randint
-import re
-import sys
 from time import time, sleep
 import urllib
 
@@ -61,14 +53,38 @@ class LoopringRestApiSample(RestClient):
         self.init(self.LOOPRING_REST_HOST)
 
 
-    # def get_exchange_configuration(self):
-    #     """
-    #     Get general exchange info
-    #     """
-    #     self.perform_request(
-    #         method="GET",
-    #         path="/api/v2/exchange/info"
-    #     )
+    def get_exchange_configuration(self):
+        """
+        Get general exchange info
+        """
+        data = {
+            "security": Security.NONE
+        }
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/exchange/info",
+            data=data
+        )
+
+    def get_market_configuration(self):
+        data = {
+            "security": Security.NONE
+        }
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/exchange/markets",
+            data=data
+        )
+
+    def get_token_configuration(self):
+        data = {
+            "security": Security.NONE
+        }
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/exchange/tokens",
+            data=data
+        )
 
     def buy(self, base_token, quote_token, price, volume):
         """
@@ -101,7 +117,6 @@ class LoopringRestApiSample(RestClient):
         self.perform_request(
             method="DELETE",
             path="/api/v2/orders",
-            callback=self.on_cancel_order,
             params=params,
             data=data
         )
@@ -162,7 +177,6 @@ class LoopringRestApiSample(RestClient):
         self.perform_request(
             method="POST",
             path="/api/v2/order",
-            callback=self.on_send_order,
             params=order,
             data=data,
             extra=order
@@ -256,15 +270,11 @@ class LoopringRestApiSample(RestClient):
         data = {
             "security": Security.NONE
         }
-
-        self.perform_request(
+        data = self.perform_request(
             "GET",
             path="/api/v2/timestamp",
-            callback=self.on_query_time,
             data=data
         )
-
-    def on_query_time(self, data, request):
         if data['resultInfo']['code'] != 0:
             raise AttributeError(f"on_query_time failed {data}")
         local_time = int(time() * 1000)
@@ -280,20 +290,16 @@ class LoopringRestApiSample(RestClient):
             "accountId": self.accountId,
             "tokenSId": tokenId
         }
-        self.perform_request(
+        data = self.perform_request(
             method="GET",
             path="/api/v2/orderId",
-            callback=self.on_query_orderId,
             params=params,
             data=data
         )
 
-    def on_query_orderId(self, data, request):
-        # print(f"on_query_orderId {request} {data}")
         if data['resultInfo']['code'] != 0:
             raise AttributeError(f"on_query_orderId failed {data}")
 
-        tokenId = request.params['tokenSId']
         self.orderId[tokenId] = int(data['data'])
 
     def _serialize_order(self, order):
@@ -313,16 +319,16 @@ class LoopringRestApiSample(RestClient):
             int(order["label"])
         ]
 
-    def on_send_order(self, data, request):
-        if data['resultInfo']['code'] == 0:
-            print(f"place order success: hash={data['data']}, clientOrderId={request.data['clientOrderId']}")
-        else:
-            raise AttributeError(data['resultInfo']['message'])
-        pass
-
-    def on_cancel_order(self, data, request):
-        if data['resultInfo']['code'] == 0:
-            print(f"cancel order {request.data} success {data}")
-        else:
-            raise AttributeError(data['resultInfo']['message'])
-        pass
+    # def on_send_order(self, data, request):
+    #     if data['resultInfo']['code'] == 0:
+    #         print(f"place order success: hash={data['data']}, clientOrderId={request.data['clientOrderId']}")
+    #     else:
+    #         raise AttributeError(data['resultInfo']['message'])
+    #     pass
+    #
+    # def on_cancel_order(self, data, request):
+    #     if data['resultInfo']['code'] == 0:
+    #         print(f"cancel order {request.data} success {data}")
+    #     else:
+    #         raise AttributeError(data['resultInfo']['message'])
+    #     pass

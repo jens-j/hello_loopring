@@ -3,7 +3,6 @@ import traceback
 from datetime import datetime
 from enum import Enum
 from multiprocessing.dummy import Pool
-from queue import Empty, Queue
 from typing import Any, Callable, Optional, Union
 
 import requests
@@ -29,7 +28,6 @@ class Request(object):
         params: dict,
         data: Union[dict, str, bytes],
         headers: dict,
-        callback: Callable = None,
         on_failed: Callable = None,
         on_error: Callable = None,
         extra: Any = None,
@@ -37,7 +35,6 @@ class Request(object):
         """"""
         self.method = method
         self.path = path
-        self.callback = callback
         self.params = params
         self.data = data
         self.headers = headers
@@ -90,9 +87,6 @@ class RestClient(object):
         self.url_base = ''  # type: str
         self._active = False
         self._session = requests.session()
-        self._queue = Queue()
-        self._pool = None  # type: Pool
-
         self.proxies = None
 
     def init(self, url_base: str, proxy_host: str = "", proxy_port: int = 0):
@@ -109,7 +103,6 @@ class RestClient(object):
         self,
         method: str,
         path: str,
-        callback: Callable,
         params: dict = None,
         data: Union[dict, str, bytes] = None,
         headers: dict = None,
@@ -121,7 +114,6 @@ class RestClient(object):
         Add a new request.
         :param method: GET, POST, PUT, DELETE, QUERY
         :param path:
-        :param callback: callback function if 2xx status, type: (dict, Request)
         :param params: dict for query string
         :param data: Http body. If it is a dict, it will be converted to form-data. Otherwise, it will be converted to bytes.
         :param headers: dict for headers
@@ -136,7 +128,6 @@ class RestClient(object):
             params,
             data,
             headers,
-            callback,
             on_failed,
             on_error,
             extra,
@@ -214,7 +205,6 @@ class RestClient(object):
                 else:
                     json_body = response.json()
 
-                request.callback(json_body, request)
                 request.status = RequestStatus.success
             else:
                 request.status = RequestStatus.failed
@@ -230,6 +220,8 @@ class RestClient(object):
                 request.on_error(t, v, tb, request)
             else:
                 self.on_error(t, v, tb, request)
+
+        return json_body
 
     def make_full_url(self, path: str):
         """
