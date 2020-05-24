@@ -89,7 +89,7 @@ class RestClient(object):
         """
         self.url_base = ''  # type: str
         self._active = False
-
+        self._session = requests.session()
         self._queue = Queue()
         self._pool = None  # type: Pool
 
@@ -105,34 +105,7 @@ class RestClient(object):
             proxy = f"{proxy_host}:{proxy_port}"
             self.proxies = {"http": proxy, "https": proxy}
 
-    def _create_session(self):
-        """"""
-        return requests.session()
-
-    def start(self, n: int = 3):
-        """
-        Start rest client with session count n.
-        """
-        if self._active:
-            return
-
-        self._active = True
-        self._pool = Pool(n)
-        self._pool.apply_async(self._run)
-
-    def stop(self):
-        """
-        Stop rest client immediately.
-        """
-        self._active = False
-
-    def join(self):
-        """
-        Wait till all requests are processed.
-        """
-        self._queue.join()
-
-    def add_request(
+    def perform_request(
         self,
         method: str,
         path: str,
@@ -147,7 +120,7 @@ class RestClient(object):
         """
         Add a new request.
         :param method: GET, POST, PUT, DELETE, QUERY
-        :param path: 
+        :param path:
         :param callback: callback function if 2xx status, type: (dict, Request)
         :param params: dict for query string
         :param data: Http body. If it is a dict, it will be converted to form-data. Otherwise, it will be converted to bytes.
@@ -168,24 +141,7 @@ class RestClient(object):
             on_error,
             extra,
         )
-        self._queue.put(request)
-        return request
-
-    def _run(self):
-        try:
-            session = self._create_session()
-            while self._active:
-                try:
-                    request = self._queue.get(timeout=1)
-                    try:
-                        self._process_request(request, session)
-                    finally:
-                        self._queue.task_done()
-                except Empty:
-                    pass
-        except Exception:
-            et, ev, tb = sys.exc_info()
-            self.on_error(et, ev, tb, None)
+        return self._process_request(request)
 
     def sign(self, request: Request):
         """
@@ -234,7 +190,7 @@ class RestClient(object):
         return text
 
     def _process_request(
-        self, request: Request, session: requests.Session
+        self, request: Request
     ):
         """
         Sending request to server and get result.
@@ -242,7 +198,7 @@ class RestClient(object):
         try:
             request = self.sign(request)
             url = self.make_full_url(request.path)
-            response = session.request(
+            response = self._session.request(
                 request.method,
                 url,
                 headers=request.headers,
@@ -294,7 +250,7 @@ class RestClient(object):
         """
         Add a new request.
         :param method: GET, POST, PUT, DELETE, QUERY
-        :param path: 
+        :param path:
         :param params: dict for query string
         :param data: dict for body
         :param headers: dict for headers

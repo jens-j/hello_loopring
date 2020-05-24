@@ -26,6 +26,7 @@ class Security(Enum):
     SIGNED = 1
     API_KEY = 2
 
+
 class LoopringRestApiSample(RestClient):
     """
     LOOPRING REST API SAMPLE
@@ -58,7 +59,114 @@ class LoopringRestApiSample(RestClient):
         self.order_sign_param = poseidon_params(SNARK_SCALAR_FIELD, 14, 6, 53, b'poseidon', 5, security_target=128)
 
         self.init(self.LOOPRING_REST_HOST)
-        self.start()
+
+
+    # def get_exchange_configuration(self):
+    #     """
+    #     Get general exchange info
+    #     """
+    #     self.perform_request(
+    #         method="GET",
+    #         path="/api/v2/exchange/info"
+    #     )
+
+    def buy(self, base_token, quote_token, price, volume):
+        """
+        Place buy order
+        """
+        self._order(base_token, quote_token, True, price, volume)
+
+    def sell(self, base_token, quote_token, price, volume):
+        """
+        Place sell order
+        """
+        self._order(base_token, quote_token, False, price, volume)
+
+    def cancel_order(self, **cancel_params):
+        """"""
+        data = {
+            "security": Security.SIGNED
+        }
+
+        params = {
+            "accountId": self.accountId,
+        }
+
+        if "clientOrderId" in cancel_params:
+            params["clientOrderId"] = cancel_params["clientOrderId"]
+        if "orderHash" in cancel_params:
+            params["orderHash"] = cancel_params["orderHash"]
+
+        print(f"cancel_order {params}")
+        self.perform_request(
+            method="DELETE",
+            path="/api/v2/orders",
+            callback=self.on_cancel_order,
+            params=params,
+            data=data
+        )
+
+    def _order(self, base_token, quote_token, buy, price, volume):
+        if buy:
+            tokenS = self.market_info_map[quote_token]
+            tokenB = self.market_info_map[base_token]
+            amountS = str(int(10 ** tokenS['decimals'] * price * volume))
+            amountB = str(int(10 ** tokenB['decimals'] * volume))
+        else:
+            tokenS = self.market_info_map[base_token]
+            tokenB = self.market_info_map[quote_token]
+            amountS = str(int(10 ** tokenS['decimals'] * volume))
+            amountB = str(int(10 ** tokenB['decimals'] * price * volume))
+
+        tokenSId = tokenS['tokenId']
+        tokenBId = tokenB['tokenId']
+
+        orderId = self.orderId[tokenSId]
+        assert orderId < self.MAX_ORDER_ID
+        self.orderId[tokenSId] += 1
+
+        # make valid time ahead 1 hour
+        validSince = int(time()) - self.time_offset - 3600
+
+        # order base
+        order = {
+            "exchangeId"    : self.exchangeId,
+            "orderId"       : orderId,
+            "accountId"     : self.accountId,
+            "tokenSId"      : tokenSId,
+            "tokenBId"      : tokenBId,
+            "amountS"       : amountS,
+            "amountB"       : amountB,
+            "allOrNone"     : "false",
+            "validSince"    : validSince,
+            "validUntil"    : validSince + 30 * 24 * 60 * 60,
+            "maxFeeBips"    : 50,
+            "label"         : 211,
+            "buy"           : "true" if buy else "false",
+            "clientOrderId" : "SampleOrder" + str(int(time()))
+        }
+
+        order_message = self._serialize_order(order)
+        msgHash = poseidon(order_message, self.order_sign_param)
+        signedMessage = PoseidonEdDSA.sign(msgHash, FQ(int(self.private_key)))
+        # update signaure
+        order.update({
+            "hash"        : str(msgHash),
+            "signatureRx" : str(signedMessage.sig.R.x),
+            "signatureRy" : str(signedMessage.sig.R.y),
+            "signatureS"  : str(signedMessage.sig.s)
+        })
+
+        # print(f"create new order {order}")
+        data = {"security": Security.SIGNED}
+        self.perform_request(
+            method="POST",
+            path="/api/v2/order",
+            callback=self.on_send_order,
+            params=order,
+            data=data,
+            extra=order
+        )
 
     def connect(self, exported_secret : dict):
         """
@@ -75,6 +183,7 @@ class LoopringRestApiSample(RestClient):
         for token_id in [info['tokenId'] for info in self.market_info_map.values()]:
             self.query_orderId(token_id)
         sleep(8)
+
 
     def sign(self, request):
         """
@@ -148,7 +257,7 @@ class LoopringRestApiSample(RestClient):
             "security": Security.NONE
         }
 
-        self.add_request(
+        self.perform_request(
             "GET",
             path="/api/v2/timestamp",
             callback=self.on_query_time,
@@ -171,7 +280,7 @@ class LoopringRestApiSample(RestClient):
             "accountId": self.accountId,
             "tokenSId": tokenId
         }
-        self.add_request(
+        self.perform_request(
             method="GET",
             path="/api/v2/orderId",
             callback=self.on_query_orderId,
@@ -187,80 +296,6 @@ class LoopringRestApiSample(RestClient):
         tokenId = request.params['tokenSId']
         self.orderId[tokenId] = int(data['data'])
 
-    def buy(self, base_token, quote_token, price, volume):
-        """
-        Place buy order
-        """
-        self._order(base_token, quote_token, True, price, volume)
-
-    def sell(self, base_token, quote_token, price, volume):
-        """
-        Place sell order
-        """
-        self._order(base_token, quote_token, False, price, volume)
-
-    def _order(self, base_token, quote_token, buy, price, volume):
-        if buy:
-            tokenS = self.market_info_map[quote_token]
-            tokenB = self.market_info_map[base_token]
-            amountS = str(int(10 ** tokenS['decimals'] * price * volume))
-            amountB = str(int(10 ** tokenB['decimals'] * volume))
-        else:
-            tokenS = self.market_info_map[base_token]
-            tokenB = self.market_info_map[quote_token]
-            amountS = str(int(10 ** tokenS['decimals'] * volume))
-            amountB = str(int(10 ** tokenB['decimals'] * price * volume))
-
-        tokenSId = tokenS['tokenId']
-        tokenBId = tokenB['tokenId']
-
-        orderId = self.orderId[tokenSId]
-        assert orderId < self.MAX_ORDER_ID
-        self.orderId[tokenSId] += 1
-
-        # make valid time ahead 1 hour
-        validSince = int(time()) - self.time_offset - 3600
-
-        # order base
-        order = {
-            "exchangeId"    : self.exchangeId,
-            "orderId"       : orderId,
-            "accountId"     : self.accountId,
-            "tokenSId"      : tokenSId,
-            "tokenBId"      : tokenBId,
-            "amountS"       : amountS,
-            "amountB"       : amountB,
-            "allOrNone"     : "false",
-            "validSince"    : validSince,
-            "validUntil"    : validSince + 30 * 24 * 60 * 60,
-            "maxFeeBips"    : 50,
-            "label"         : 211,
-            "buy"           : "true" if buy else "false",
-            "clientOrderId" : "SampleOrder" + str(int(time()))
-        }
-
-        order_message = self._serialize_order(order)
-        msgHash = poseidon(order_message, self.order_sign_param)
-        signedMessage = PoseidonEdDSA.sign(msgHash, FQ(int(self.private_key)))
-        # update signaure
-        order.update({
-            "hash"        : str(msgHash),
-            "signatureRx" : str(signedMessage.sig.R.x),
-            "signatureRy" : str(signedMessage.sig.R.y),
-            "signatureS"  : str(signedMessage.sig.s)
-        })
-
-        # print(f"create new order {order}")
-        data = {"security": Security.SIGNED}
-        self.add_request(
-            method="POST",
-            path="/api/v2/order",
-            callback=self.on_send_order,
-            params=order,
-            data=data,
-            extra=order
-        )
-
     def _serialize_order(self, order):
         return [
             int(order["exchangeId"]),
@@ -274,7 +309,7 @@ class LoopringRestApiSample(RestClient):
             int(order["validSince"]),
             int(order["validUntil"]),
             int(order["maxFeeBips"]),
-            int(order["buy"] == 'true'),            
+            int(order["buy"] == 'true'),
             int(order["label"])
         ]
 
@@ -285,39 +320,9 @@ class LoopringRestApiSample(RestClient):
             raise AttributeError(data['resultInfo']['message'])
         pass
 
-    def cancel_order(self, **cancel_params):
-        """"""
-        data = {
-            "security": Security.SIGNED
-        }
-
-        params = {
-            "accountId": self.accountId,
-        }
-
-        if "clientOrderId" in cancel_params:
-            params["clientOrderId"] = cancel_params["clientOrderId"]
-        if "orderHash" in cancel_params:
-            params["orderHash"] = cancel_params["orderHash"]
-
-        print(f"cancel_order {params}")
-        self.add_request(
-            method="DELETE",
-            path="/api/v2/orders",
-            callback=self.on_cancel_order,
-            params=params,
-            data=data
-        )
-
     def on_cancel_order(self, data, request):
         if data['resultInfo']['code'] == 0:
             print(f"cancel order {request.data} success {data}")
         else:
             raise AttributeError(data['resultInfo']['message'])
         pass
-
-
-
-
-
-
