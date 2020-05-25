@@ -34,16 +34,17 @@ class LoopringRestApiSample(RestClient):
         "DAI"  : {"tokenId":5,"symbol":"DAI","decimals":18}
     }
 
-    def __init__(self):
+    def __init__(self, api_key, exchangeId, private_key, address, accountId):
         """"""
         super().__init__()
         # exported account
-        self.api_key     = ""
-        self.private_key = ""
-        self.address     = ""
-        self.publicKeyX  = ""
-        self.publicKeyY  = ""
-        self.accountId   = 0
+        self.api_key     = api_key
+        self.exchangeId  = exchangeId
+        self.private_key = private_key
+        self.address     = address
+        self.accountId   = accountId
+        self.restData    = {"security": Security.NONE}
+        self.restHeader  = {'X-API-KEY': self.api_key}
 
         # order related
         self.orderId     = [None] * 256
@@ -51,52 +52,128 @@ class LoopringRestApiSample(RestClient):
         self.order_sign_param = poseidon_params(SNARK_SCALAR_FIELD, 14, 6, 53, b'poseidon', 5, security_target=128)
 
         self.init(self.LOOPRING_REST_HOST)
+        self.connect()
 
+    def connect(self):
+        """
+        Initialize connection to LOOPRING REST server.
+        """
+        # align srv and local time
+        self.query_time()
+        for token_id in [info['tokenId'] for info in self.market_info_map.values()]:
+            self.query_orderId(token_id)
+        #sleep(8)
 
     def get_exchange_configuration(self):
         """
         Get general exchange info
         """
-        data = {
-            "security": Security.NONE
-        }
+
         return self.perform_request(
             method="GET",
             path="/api/v2/exchange/info",
-            data=data
+            data=self.restData
         )
 
     def get_market_configuration(self):
-        data = {
-            "security": Security.NONE
-        }
+        """
+        Get market info
+        """
+
         return self.perform_request(
             method="GET",
             path="/api/v2/exchange/markets",
-            data=data
+            data=self.restData
         )
 
     def get_token_configuration(self):
-        data = {
-            "security": Security.NONE
-        }
+        """
+        Get token info
+        """
+
         return self.perform_request(
             method="GET",
             path="/api/v2/exchange/tokens",
-            data=data
+            data=self.restData
+        )
+
+    def get_market_orderbook(self, market, level, limit=50):
+        """
+        Get orderbook
+        """
+
+        params = {
+            'market': market,
+            'level': level,
+            'limit': limit
+        }
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/depth",
+            data=self.restData,
+            params=params
+        )
+
+    def get_user_exchange_balances(self, accountId, tokens):
+        """
+        Get account balance
+        """
+
+        params = {
+            'accountId': accountId
+        }
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/user/balances",
+            data=self.restData,
+            params=params,
+            headers=self.restHeader
+        )
+
+    def get_order_details(self, accountId, orderHash):
+
+        params = {
+            'accountId': accountId,
+            'orderHash': orderHash
+        }
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/order",
+            data=self.restData,
+            params=params,
+            headers=self.restHeader
+        )
+
+    def get_multiple_orders(self, accountId, start, end, market=None, limit=50):
+
+        params = {
+            'accountId': accountId,
+            'start': start,
+            'end': end,
+            'limit': limit,
+        }
+        if not market is None:
+            params['market'] = market
+
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/orders",
+            data=self.restData,
+            params=params,
+            headers=self.restHeader
         )
 
     def buy(self, base_token, quote_token, price, volume):
         """
         Place buy order
         """
-        self._order(base_token, quote_token, True, price, volume)
+        return self._order(base_token, quote_token, True, price, volume)
 
     def sell(self, base_token, quote_token, price, volume):
         """
         Place sell order
         """
-        self._order(base_token, quote_token, False, price, volume)
+        return self._order(base_token, quote_token, False, price, volume)
 
     def cancel_order(self, **cancel_params):
         """"""
@@ -114,7 +191,7 @@ class LoopringRestApiSample(RestClient):
             params["orderHash"] = cancel_params["orderHash"]
 
         print(f"cancel_order {params}")
-        self.perform_request(
+        return self.perform_request(
             method="DELETE",
             path="/api/v2/orders",
             params=params,
@@ -174,30 +251,13 @@ class LoopringRestApiSample(RestClient):
 
         # print(f"create new order {order}")
         data = {"security": Security.SIGNED}
-        self.perform_request(
+        return self.perform_request(
             method="POST",
             path="/api/v2/order",
             params=order,
             data=data,
             extra=order
         )
-
-    def connect(self, exported_secret : dict):
-        """
-        Initialize connection to LOOPRING REST server.
-        """
-        self.api_key     = exported_secret['apiKey']
-        self.exchangeId  = exported_secret['exchangeId']
-        self.private_key = exported_secret['privateKey'].encode()
-        self.address     = exported_secret['accountAddress']
-        self.accountId   = exported_secret['accountId']
-
-        # align srv and local time
-        self.query_time()
-        for token_id in [info['tokenId'] for info in self.market_info_map.values()]:
-            self.query_orderId(token_id)
-        sleep(8)
-
 
     def sign(self, request):
         """
@@ -318,17 +378,3 @@ class LoopringRestApiSample(RestClient):
             int(order["buy"] == 'true'),
             int(order["label"])
         ]
-
-    # def on_send_order(self, data, request):
-    #     if data['resultInfo']['code'] == 0:
-    #         print(f"place order success: hash={data['data']}, clientOrderId={request.data['clientOrderId']}")
-    #     else:
-    #         raise AttributeError(data['resultInfo']['message'])
-    #     pass
-    #
-    # def on_cancel_order(self, data, request):
-    #     if data['resultInfo']['code'] == 0:
-    #         print(f"cancel order {request.data} success {data}")
-    #     else:
-    #         raise AttributeError(data['resultInfo']['message'])
-    #     pass
