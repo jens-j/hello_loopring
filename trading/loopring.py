@@ -19,13 +19,14 @@ class Security(Enum):
     API_KEY = 2
 
 
-class LoopringRestApiSample(RestClient):
+class LoopringRestApi(RestClient):
     """
     LOOPRING REST API SAMPLE
     """
 
     LOOPRING_REST_HOST   = "https://api.loopring.io"
     MAX_ORDER_ID = 1_000_000
+
 
     market_info_map = {
         "ETH"  : {"tokenId":0, "symbol":"ETH",  "decimals":18},
@@ -58,11 +59,11 @@ class LoopringRestApiSample(RestClient):
         """
         Initialize connection to LOOPRING REST server.
         """
+
         # align srv and local time
         self.query_time()
         for token_id in [info['tokenId'] for info in self.market_info_map.values()]:
             self.query_orderId(token_id)
-        #sleep(8)
 
     def get_exchange_configuration(self):
         """
@@ -158,6 +159,44 @@ class LoopringRestApiSample(RestClient):
         return self.perform_request(
             method="GET",
             path="/api/v2/orders",
+            data=self.restData,
+            params=params,
+            headers=self.restHeader
+        )
+
+    def get_user_deposit_history(self, accountId, start, end, token_symbol=None, limit=50):
+
+        params = {
+            'accountId': accountId,
+            'start': start,
+            'end': end,
+            'limit': limit,
+        }
+        if not token_symbol is None:
+            params['tokenSymbol'] = token_symbol
+
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/user/deposits",
+            data=self.restData,
+            params=params,
+            headers=self.restHeader
+        )
+
+    def get_user_withdrawal_history(self, accountId, start, end, token_symbol=None, limit=50):
+
+        params = {
+            'accountId': accountId,
+            'start': start,
+            'end': end,
+            'limit': limit,
+        }
+        if not token_symbol is None:
+            params['tokenSymbol'] = token_symbol
+
+        return self.perform_request(
+            method="GET",
+            path="/api/v2/user/withdrawals",
             data=self.restData,
             params=params,
             headers=self.restHeader
