@@ -5,6 +5,7 @@ import hashlib
 import json
 from enum import Enum
 from time import time, sleep
+from decimal import Decimal
 import urllib
 
 from trading.rest_client import RestClient, Request
@@ -32,7 +33,7 @@ class LoopringRestApi(RestClient):
         "ETH"  : {"tokenId":0, "symbol":"ETH",  "decimals":18},
         "LRC"  : {"tokenId":2, "symbol":"LRC",  "decimals":18},
         "USDT" : {"tokenId":3, "symbol":"USDT", "decimals":6},
-        "DAI"  : {"tokenId":5,"symbol":"DAI","decimals":18}
+        "DAI"  : {"tokenId":5, "symbol":"DAI",  "decimals":18}
     }
 
     def __init__(self, api_key, exchangeId, private_key, address, accountId):
@@ -50,7 +51,8 @@ class LoopringRestApi(RestClient):
         # order related
         self.orderId     = [None] * 256
         self.time_offset = 0
-        self.order_sign_param = poseidon_params(SNARK_SCALAR_FIELD, 14, 6, 53, b'poseidon', 5, security_target=128)
+        self.order_sign_param = poseidon_params(
+            SNARK_SCALAR_FIELD, 14, 6, 53, b'poseidon', 5, security_target=128)
 
         self.init(self.LOOPRING_REST_HOST)
         self.connect()
@@ -202,17 +204,17 @@ class LoopringRestApi(RestClient):
             headers=self.restHeader
         )
 
-    def buy(self, base_token, quote_token, price, volume):
+    def buy(self, base_token, quote_token, price, amount):
         """
         Place buy order
         """
-        return self._order(base_token, quote_token, True, price, volume)
+        return self._order(base_token, quote_token, True, price, amount)
 
-    def sell(self, base_token, quote_token, price, volume):
+    def sell(self, base_token, quote_token, price, amount):
         """
         Place sell order
         """
-        return self._order(base_token, quote_token, False, price, volume)
+        return self._order(base_token, quote_token, False, price, amount)
 
     def cancel_order(self, **cancel_params):
         """"""
@@ -229,7 +231,6 @@ class LoopringRestApi(RestClient):
         if "orderHash" in cancel_params:
             params["orderHash"] = cancel_params["orderHash"]
 
-        print(f"cancel_order {params}")
         return self.perform_request(
             method="DELETE",
             path="/api/v2/orders",
@@ -237,17 +238,25 @@ class LoopringRestApi(RestClient):
             data=data
         )
 
-    def _order(self, base_token, quote_token, buy, price, volume):
+    def _order(self, base_token, quote_token, buy, price, amount):
+
+        # use a decimal intermediate to avoid floating point inaccuracies
         if buy:
             tokenS = self.market_info_map[quote_token]
             tokenB = self.market_info_map[base_token]
-            amountS = str(int(10 ** tokenS['decimals'] * price * volume))
-            amountB = str(int(10 ** tokenB['decimals'] * volume))
+            amountS = str(int(10**tokenS['decimals'] * Decimal(str(price)) * Decimal(str(amount))))
+            amountB = str(int(10**tokenB['decimals'] * Decimal(str(amount))))
         else:
             tokenS = self.market_info_map[base_token]
             tokenB = self.market_info_map[quote_token]
-            amountS = str(int(10 ** tokenS['decimals'] * volume))
-            amountB = str(int(10 ** tokenB['decimals'] * price * volume))
+            amountS = str(int(10**tokenS['decimals'] * Decimal(str(amount))))
+            amountB = str(int(10**tokenB['decimals'] * Decimal(str(price)) * Decimal(str(amount))))
+
+
+
+        print(amountB)
+        print(amountS)
+        print('%.8f' % (int(amountB) / int(amountS)))
 
         tokenSId = tokenS['tokenId']
         tokenBId = tokenB['tokenId']
@@ -269,8 +278,8 @@ class LoopringRestApi(RestClient):
             "amountS"       : amountS,
             "amountB"       : amountB,
             "allOrNone"     : "false",
-            "validSince"    : validSince,
-            "validUntil"    : validSince + 30 * 24 * 60 * 60,
+            "validSince"    : 0,
+            "validUntil"    : 2147483647,
             "maxFeeBips"    : 50,
             "label"         : 211,
             "buy"           : "true" if buy else "false",
