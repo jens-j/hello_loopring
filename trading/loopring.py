@@ -252,12 +252,6 @@ class LoopringRestApi(RestClient):
             amountS = str(int(10**tokenS['decimals'] * Decimal(str(amount))))
             amountB = str(int(10**tokenB['decimals'] * Decimal(str(price)) * Decimal(str(amount))))
 
-
-
-        print(amountB)
-        print(amountS)
-        print('%.8f' % (int(amountB) / int(amountS)))
-
         tokenSId = tokenS['tokenId']
         tokenBId = tokenB['tokenId']
 
@@ -289,6 +283,7 @@ class LoopringRestApi(RestClient):
         order_message = self._serialize_order(order)
         msgHash = poseidon(order_message, self.order_sign_param)
         signedMessage = PoseidonEdDSA.sign(msgHash, FQ(int(self.private_key)))
+        
         # update signaure
         order.update({
             "hash"        : str(msgHash),
