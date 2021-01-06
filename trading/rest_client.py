@@ -215,7 +215,7 @@ class RestClient(object):
                     self.on_failed(status_code, request)
 
         except Exception as e:
-            print(e)
+            #print(e)
             # request.status = RequestStatus.error
             # t, v, tb = sys.exc_info()
             # if request.on_error:
