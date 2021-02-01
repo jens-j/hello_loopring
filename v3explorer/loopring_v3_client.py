@@ -49,9 +49,12 @@ class LoopringV3AmmSampleClient(RestClient):
     LOOPRING_REST_HOST = LOOPRING_REST_HOST
     MAX_ORDER_ID = 1<<32
 
-    def __init__(self):
+    def __init__(self, assetNames=[]):
         """"""
         super().__init__()
+
+        self.assetNames = assetNames
+
         # exported account
         self.api_key     = ""
         self.address     = ""
@@ -62,17 +65,19 @@ class LoopringV3AmmSampleClient(RestClient):
         # self.web3 = Web3(Web3.HTTPProvider(eth_addr))
         # order related
         self.orderId     = [0] * 256
-        self.offchainId     = [0] * 256
+        self.offchainId  = [0] * 256
         self.time_offset = 0
-        self.nonce      = 0
+        self.nonce       = 0
 
         self.ammPoolNames = {}
         self.ammPools = {}
         self.tokenIds = {}
         self.tokenNames = {}
         self.tokenDecimals = {}
+        self.withdrawalFees = {} # withdrawal fees
 
         self.init(self.LOOPRING_REST_HOST)
+
 
     def connect(self, exported_secret : dict):
         """
@@ -97,12 +102,24 @@ class LoopringV3AmmSampleClient(RestClient):
         self.query_market_config()
         self.get_account()
         self.get_apiKey()
+        self.get_fees()
 
         EIP712.init_env(name="Loopring Protocol",
                         version="3.6.0",
                         chainId=self.chainId,
                         verifyingContract=exported_secret['exchange'])
-        #sleep(7)
+
+        for name in self.assetNames:
+            self.get_storageId(self.tokenIds[name])
+
+
+    def get_fees(self):
+        
+        info = self.query_info('exchange/info')
+
+        for d in info['withdrawalFees']:
+            self.withdrawalFees[self.tokenIds[d['token']]] = d['fee']
+
 
     def sign(self, request):
         """
@@ -141,7 +158,7 @@ class LoopringV3AmmSampleClient(RestClient):
 
         request.path = path
         if request.method not in ["GET", "DELETE"]:
-            request.data = ujson.dumps(request.data) if len(request.data) != 0 else request.params
+            request.data = json.dumps(request.data) if len(request.data) != 0 else request.params
             request.params = {}
         else:
             request.data = {}
@@ -174,7 +191,7 @@ class LoopringV3AmmSampleClient(RestClient):
             "security": Security.NONE
         }
 
-        response = self.request(
+        return self.request(
             "GET",
             headers={
                 "Content-Type" : "application/json",
@@ -182,10 +199,7 @@ class LoopringV3AmmSampleClient(RestClient):
             },
             path="/api/v3/" + restPath,
             data=data
-        )
-        json_resp = response.json()
-        # print(ujson.dumps(json_resp, indent=4, sort_keys=True))
-        [self.query_amm_pool_balance(pool["address"]) for pool in json_resp["pools"]]
+        ).json()
 
     def query_amm_pool_balance(self, poolAddress):
         """"""
@@ -202,7 +216,7 @@ class LoopringV3AmmSampleClient(RestClient):
             path="/api/v3/amm/balance",
             data=data,
             params={"poolAddress": poolAddress[2:]}
-        )
+        ).json()
 
     def query_time(self):
         """"""
@@ -261,8 +275,9 @@ class LoopringV3AmmSampleClient(RestClient):
             tokens = pool['tokens']['pooled']
             tokens.append(pool['tokens']['lp'])
             for token_id in tokens:
-                if token_id not in self.orderId:
-                    self.get_storageId(token_id)
+                if self.tokenNames[token_id] in self.assetNames:
+                    if token_id not in self.orderId:
+                        self.get_storageId(token_id)
             self.ammPools[pool['address']] = tuple(tokens)
             self.ammPoolNames[pool['name']] = pool['address']
 
@@ -324,19 +339,52 @@ class LoopringV3AmmSampleClient(RestClient):
         """"""
         return self.get_user_data("deposits")
 
-    def get_orders(self):
+    def get_market_orderbook(self, market, level=0, limit=50):
+        """"""
+        params = {
+            "market": market,
+            "limit": limit,
+            "level": level
+        }
+
+        return self.perform_request(
+            "GET",
+            path="/api/v3/depth",
+            data={"security": Security.NONE},
+            params=params,
+        )
+
+    def get_order_details(self, orderHash):
+        """"""
+        data = {
+            "security": Security.API_KEY
+        }
+        params = {
+            "accountId": self.accountId,
+            "orderHash": orderHash
+        }
+
+        return self.perform_request(
+            "GET",
+            path=f"/api/v3/order",
+            data=data,
+            params=params,
+            extra=self.accountId
+        )
+
+    def get_orders(self, start=None, end=None):
         """"""
         data = {
             "security": Security.API_KEY
         }
 
         params = {
-            "accountId": self.accountId,
-            # "start" : 0,
-            # "end" : 1700000000,
-            # "status": "processing",
-            # "limit" : 500
+            "accountId": self.accountId
         }
+        if start:
+            params['start'] = start
+        if end:
+            params['end'] = end
 
         return self.perform_request(
             "GET",
@@ -417,7 +465,14 @@ class LoopringV3AmmSampleClient(RestClient):
 
         self.orderId[tokenSId] = data['orderId']
         self.offchainId[tokenSId] = data['offchainId']
-        # print(f" self.offchainId = { self.offchainId},  self.orderId = { self.orderId}")
+
+        # order ids must be even
+        if self.orderId[tokenSId] & 0x1 == 1:
+            self.orderId[tokenSId] += 1
+
+        # withdrawal ids must be odd
+        if self.offchainId[tokenSId] & 0x1 == 0:
+            self.offchainId[tokenSId] += 1
 
     def update_account_ecdsa(self, privateKey, publicKey):
         """"""
@@ -495,7 +550,7 @@ class LoopringV3AmmSampleClient(RestClient):
         if data['status'] in ["processing", "processed"]:
             self.eddsaKey = self.next_eddsaKey
             self.next_eddsaKey = None
-            publicKeyInfo = ujson.loads(request.data)
+            publicKeyInfo = json.loads(request.data)
             self.publicKeyX = publicKeyInfo['publicKey']['x']
             self.publicKeyY = publicKeyInfo['publicKey']['y']
             print(f"on_update_account get response: {data}")
@@ -542,6 +597,9 @@ class LoopringV3AmmSampleClient(RestClient):
         data = {"security": Security.ECDSA_AUTH}
         data.update(req)
 
+        print(req)
+        exit()
+
         signer = OriginTransferEddsaSignHelper(self.eddsaKey)
         signedMessage = signer.sign(req)
         if not approved:
@@ -562,8 +620,10 @@ class LoopringV3AmmSampleClient(RestClient):
 
     def _create_transfer_request(self, to_b, token, amount, validUntil = None, storageId = None):
         """"""
+
         tokenId = self.tokenIds[token]
         decimalUnit = 10**self.tokenDecimals[tokenId]
+
         if storageId is None:
             storageId = self.offchainId[tokenId]
             self.offchainId[tokenId] += 2
@@ -587,10 +647,10 @@ class LoopringV3AmmSampleClient(RestClient):
             "memo": f"test {storageId} token({tokenId}) transfer from hello_loopring"
         }
 
-    def offchainWithdraw_ecdsa(self, to_b, token, amount, minGas):
+    def offchainWithdraw_ecdsa(self, token, amount, minGas=0):
         """"""
         data = {"security": Security.ECDSA_AUTH}
-        req = self._create_offchain_withdraw_request(to_b, token, amount, minGas, bytes(0))
+        req = self._create_offchain_withdraw_request(token, amount, minGas, bytes(0))
         # print(f"create new order {order}")
         data.update(req)
 
@@ -608,11 +668,11 @@ class LoopringV3AmmSampleClient(RestClient):
             extra=req
         )
 
-    def offchainWithdraw_eddsa(self, to_b, token, amount, minGas,
-                                extraData=bytes(0), validUntil=None, storageId=None):
+    def offchainWithdraw_eddsa(self, token, amount, minGas=0,
+                               extraData=bytes(0), validUntil=None, storageId=None):
         """"""
         data = {"security": Security.ECDSA_AUTH}
-        req = self._create_offchain_withdraw_request(to_b, token, amount, minGas, extraData, validUntil, storageId)
+        req = self._create_offchain_withdraw_request(token, amount, minGas, extraData, validUntil, storageId)
         data.update(req)
 
         signer = WithdrawalEddsaSignHelper(self.eddsaKey)
@@ -633,15 +693,14 @@ class LoopringV3AmmSampleClient(RestClient):
             extra=req
         )
 
-    def _create_offchain_withdraw_request(self, to: str, token, amount: float, minGas: int,
-                                            extraData=bytes(0), validUntil=None, storageId=None):
+    def _create_offchain_withdraw_request(self, token, amount: float, minGas: int,
+                                          extraData=bytes(0), validUntil=None, storageId=None):
         """"""
         tokenId = self.tokenIds[token]
         decimalUnit = 10**self.tokenDecimals[tokenId]
-        toAddr = self.address if to == "" else to
-        onchainDataHash = Web3.keccak(b''. join([int(minGas).to_bytes(32, 'big'),
-                                                 int(toAddr, 16).to_bytes(20, 'big'),
-                                                 extraData]))[:20]
+        onchainDataHash = Web3.keccak(b''.join([int(minGas).to_bytes(32, 'big'),
+                                                int(self.address, 16).to_bytes(20, 'big'),
+                                                extraData]))[:20]
         if storageId is None:
             storageId = self.offchainId[tokenId]
             self.offchainId[tokenId] += 2
@@ -656,9 +715,10 @@ class LoopringV3AmmSampleClient(RestClient):
             },
             "maxFee" : {
                 "tokenId": tokenId,
-                "volume": str(int(amount*decimalUnit/1000))
+                "volume": self.withdrawalFees[tokenId]
+                # "volume": str(int(amount*decimalUnit/1000))
             },
-            "to": toAddr,
+            "to": self.address,
             "onChainDataHash": "0x" + bytes.hex(onchainDataHash),
             "storageId": storageId,
             "validUntil" : int(time()) + 60 * 60 * 24 * 60 if validUntil is None else validUntil,
@@ -666,8 +726,9 @@ class LoopringV3AmmSampleClient(RestClient):
             "extraData": bytes.hex(extraData)
         }
 
-    def send_order(self, base_token, quote_token, buy, price, volume, ammPoolAddress = None):
-        order = self._create_order(base_token, quote_token, buy, price, volume, ammPoolAddress)
+    def send_order(self, base_token, quote_token, buy, price, amount,
+            max_slippage=0.005, ammPoolAddress=None):
+        order = self._create_order(base_token, quote_token, buy, price, amount, max_slippage, ammPoolAddress)
         # print(f"create new order {order}")
         data = {"security": Security.API_KEY}
         headers = {
@@ -682,17 +743,21 @@ class LoopringV3AmmSampleClient(RestClient):
             extra=order
         )
 
-    def _create_order(self, base_token, quote_token, buy, price, volume, ammPoolAddress):
+    def _create_order(self, base_token, quote_token, buy, price, amount, max_slippage, ammPoolAddress):
         if buy:
             tokenSId = self.tokenIds[quote_token]
             tokenBId = self.tokenIds[base_token]
-            amountS = str(int(10 ** self.tokenDecimals[tokenSId] * price * volume))
-            amountB = str(int(10 ** self.tokenDecimals[tokenBId] * volume))
+            amountS = int(10 ** self.tokenDecimals[tokenSId] * price * amount)
+            amountB = int(10 ** self.tokenDecimals[tokenBId] * amount)
         else:
             tokenSId = self.tokenIds[base_token]
             tokenBId = self.tokenIds[quote_token]
-            amountS = str(int(10 ** self.tokenDecimals[tokenSId] * volume))
-            amountB = str(int(10 ** self.tokenDecimals[tokenBId] * price * volume))
+            amountS = int(10 ** self.tokenDecimals[tokenSId] * amount)
+            amountB = int(10 ** self.tokenDecimals[tokenBId] * price * amount)
+
+        # slippage only applies to AMM
+        if not ammPoolAddress is None:
+            amountB = int(amountB / (1 + max_slippage))
 
         orderId = self.orderId[tokenSId]
         assert orderId < self.MAX_ORDER_ID
@@ -706,11 +771,11 @@ class LoopringV3AmmSampleClient(RestClient):
             "storageId"     : orderId,
             "sellToken": {
                 "tokenId": tokenSId,
-                "volume": amountS
+                "volume": str(amountS)
             },
             "buyToken" : {
                 "tokenId": tokenBId,
-                "volume": amountB
+                "volume": str(amountB)
             },
             "validUntil"    : 1700000000,
             "maxFeeBips"    : 50,
@@ -815,6 +880,13 @@ class LoopringV3AmmSampleClient(RestClient):
         if storageIds is None:
             self.offchainId[tokenAId]+=2
             self.offchainId[tokenBId]+=2
+
+            # offchain ids bust be odd
+            if self.offchainId[tokenAId] & 0x1 == 0:
+                self.offchainId[tokenAId] + 1
+            if self.offchainId[tokenBId] & 0x1 == 0:
+                self.offchainId[tokenBId] + 1
+
         return req
 
     def exit_amm_pool(self, poolName, burnAmount, exitMinAmounts, sigType=SignatureType.EDDSA):
