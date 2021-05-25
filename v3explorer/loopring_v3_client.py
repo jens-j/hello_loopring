@@ -70,11 +70,14 @@ class LoopringV3AmmSampleClient(RestClient):
         self.nonce       = 0
 
         self.ammPoolNames = {}
+        self.ammPoolAddresses = {}
         self.ammPools = {}
         self.tokenIds = {}
         self.tokenNames = {}
         self.tokenDecimals = {}
         self.withdrawalFees = {} # withdrawal fees
+        self.fastWithdrawalFees = {}
+        self.fastWithdrawalTokens = []
 
         self.init(self.LOOPRING_REST_HOST)
 
@@ -94,7 +97,6 @@ class LoopringV3AmmSampleClient(RestClient):
         self.chainId    = exported_secret["chainId"]
 
         self.next_eddsaKey = None
-
         self.ammJoinfeeBips = 0.0015
 
         # align srv and local time
@@ -102,23 +104,16 @@ class LoopringV3AmmSampleClient(RestClient):
         self.query_market_config()
         self.get_account()
         self.get_apiKey()
-        self.get_fees()
+        # self.get_fees()
+
+        for name in self.assetNames:
+            #sleep(1)
+            self.get_storageId(self.tokenIds[name])
 
         EIP712.init_env(name="Loopring Protocol",
                         version="3.6.0",
                         chainId=self.chainId,
                         verifyingContract=exported_secret['exchange'])
-
-        for name in self.assetNames:
-            self.get_storageId(self.tokenIds[name])
-
-
-    def get_fees(self):
-        
-        info = self.query_info('exchange/info')
-
-        for d in info['withdrawalFees']:
-            self.withdrawalFees[self.tokenIds[d['token']]] = d['fee']
 
 
     def sign(self, request):
@@ -253,6 +248,8 @@ class LoopringV3AmmSampleClient(RestClient):
             self.tokenIds[d['symbol']] = d['tokenId']
             self.tokenNames[d['tokenId']] = d['symbol']
             self.tokenDecimals[d['tokenId']] = d['decimals']
+            if d['fastWithdrawLimit'] != '0':
+                self.fastWithdrawalTokens.append(d['symbol'])
 
         self.query_amm_pools()
 
@@ -274,12 +271,9 @@ class LoopringV3AmmSampleClient(RestClient):
             EIP712.init_amm_env(pool['name'], pool['version'], self.chainId, pool['address'])
             tokens = pool['tokens']['pooled']
             tokens.append(pool['tokens']['lp'])
-            for token_id in tokens:
-                if self.tokenNames[token_id] in self.assetNames:
-                    if token_id not in self.orderId:
-                        self.get_storageId(token_id)
             self.ammPools[pool['address']] = tuple(tokens)
             self.ammPoolNames[pool['name']] = pool['address']
+            self.ammPoolAddresses[pool['address']] = pool['name']
 
     def get_account(self):
         """"""
@@ -299,19 +293,21 @@ class LoopringV3AmmSampleClient(RestClient):
         # print(f"on_query_account get response: {data}")
         self.nonce = data['nonce']
 
-    def get_user_data(self, dataType):
+    def get_user_data(self, dataType, kwargs={}):
         """"""
         data = {
             "security": Security.API_KEY
         }
 
+        params = {"accountId": self.accountId}
+        for k, v in kwargs.items():
+            params[k] = v
+
         return self.perform_request(
             "GET",
             path=f"/api/v3/user/{dataType}",
             data=data,
-            params = {
-                "accountId": self.accountId
-            },
+            params = params,
             extra=dataType
         )
 
@@ -647,10 +643,12 @@ class LoopringV3AmmSampleClient(RestClient):
             "memo": f"test {storageId} token({tokenId}) transfer from hello_loopring"
         }
 
-    def offchainWithdraw_ecdsa(self, token, amount, minGas=0):
+    def offchainWithdraw_ecdsa(self, token, amount, minGas=0, fastWithdrawalMode=False, feeToken='ETH'):
         """"""
         data = {"security": Security.ECDSA_AUTH}
-        req = self._create_offchain_withdraw_request(token, amount, minGas, bytes(0))
+        req = self._create_offchain_withdraw_request(token, amount, minGas, bytes(0),
+                                                     fastWithdrawalMode=fastWithdrawalMode,
+                                                     feeToken=feeToken)
         # print(f"create new order {order}")
         data.update(req)
 
@@ -669,10 +667,14 @@ class LoopringV3AmmSampleClient(RestClient):
         )
 
     def offchainWithdraw_eddsa(self, token, amount, minGas=0,
-                               extraData=bytes(0), validUntil=None, storageId=None):
+                               extraData=bytes(0), validUntil=None, storageId=None,
+                               fastWithdrawalMode=False, feeToken='ETH'):
         """"""
         data = {"security": Security.ECDSA_AUTH}
-        req = self._create_offchain_withdraw_request(token, amount, minGas, extraData, validUntil, storageId)
+        req = self._create_offchain_withdraw_request(token, amount, minGas, extraData=extraData,
+                                                     validUntil=validUntil, storageId=storageId,
+                                                     fastWithdrawalMode=fastWithdrawalMode,
+                                                     feeToken=feeToken)
         data.update(req)
 
         signer = WithdrawalEddsaSignHelper(self.eddsaKey)
@@ -694,7 +696,8 @@ class LoopringV3AmmSampleClient(RestClient):
         )
 
     def _create_offchain_withdraw_request(self, token, amount: float, minGas: int,
-                                          extraData=bytes(0), validUntil=None, storageId=None):
+                                          extraData=bytes(0), validUntil=None, storageId=None,
+                                          fastWithdrawalMode=False, feeToken='ETH'):
         """"""
         tokenId = self.tokenIds[token]
         decimalUnit = 10**self.tokenDecimals[tokenId]
@@ -705,6 +708,8 @@ class LoopringV3AmmSampleClient(RestClient):
             storageId = self.offchainId[tokenId]
             self.offchainId[tokenId] += 2
 
+        feeAmount = self._getWithdawalFee(token, feeToken, fastWithdrawalMode=fastWithdrawalMode)
+
         return {
             "exchange": self.exchange,
             "accountId": self.accountId,
@@ -714,17 +719,27 @@ class LoopringV3AmmSampleClient(RestClient):
                 "volume": str(int(amount*decimalUnit))
             },
             "maxFee" : {
-                "tokenId": tokenId,
-                "volume": self.withdrawalFees[tokenId]
-                # "volume": str(int(amount*decimalUnit/1000))
+                "tokenId": self.tokenIds[feeToken],
+                "volume": feeAmount
             },
             "to": self.address,
             "onChainDataHash": "0x" + bytes.hex(onchainDataHash),
             "storageId": storageId,
             "validUntil" : int(time()) + 60 * 60 * 24 * 60 if validUntil is None else validUntil,
             "minGas": minGas,
-            "extraData": bytes.hex(extraData)
+            "extraData": bytes.hex(extraData),
+            "fastWithdrawalMode": fastWithdrawalMode
         }
+
+    def _getWithdawalFee(self, token, feeToken, fastWithdrawalMode=False):
+
+        type = 4 if fastWithdrawalMode else 1
+        response = self.get_user_data('offchainFee', kwargs={'requestType': type, 'tokenSymbol': token, 'amount': 100})
+
+        for d in response['fees']:
+            if d['token'] == feeToken:
+                return d['fee']
+
 
     def send_order(self, base_token, quote_token, buy, price, amount,
             max_slippage=0.005, ammPoolAddress=None):
