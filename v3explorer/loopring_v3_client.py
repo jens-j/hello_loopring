@@ -14,6 +14,7 @@ import sys
 from time import time, sleep
 import urllib
 from web3 import Web3
+from pprint import PrettyPrinter
 
 from trading.rest_client import RestClient, Request
 from ethsnarks.eddsa import PureEdDSA, PoseidonEdDSA
@@ -55,6 +56,8 @@ class LoopringV3AmmSampleClient(RestClient):
 
         self.assetNames = assetNames
 
+        self.pp          = PrettyPrinter()
+
         # exported account
         self.api_key     = ""
         self.address     = ""
@@ -64,8 +67,8 @@ class LoopringV3AmmSampleClient(RestClient):
 
         # self.web3 = Web3(Web3.HTTPProvider(eth_addr))
         # order related
-        self.orderId     = [0] * 256
-        self.offchainId  = [0] * 256
+        self.orderId     = [0] * 1024
+        self.offchainId  = [0] * 1024
         self.time_offset = 0
         self.nonce       = 0
 
@@ -139,6 +142,8 @@ class LoopringV3AmmSampleClient(RestClient):
             "Content-Type" : "application/json",
             "Accept"       : "application/json",
             "X-API-KEY"    : self.api_key,
+            'User-Agent'   : 'Arbitrage bot',
+            'From'         : 'plsnospam@proton.me'
         }
         if request.headers != None:
             headers.update(request.headers)
@@ -281,17 +286,21 @@ class LoopringV3AmmSampleClient(RestClient):
             "security": Security.API_KEY
         }
 
-        data = self.perform_request(
+        response = self.perform_request(
             "GET",
             path="/api/v3/account",
             data=data,
             params = {
+                "accountId": self.accountId,
                 "owner": self.address
             }
         )
 
         # print(f"on_query_account get response: {data}")
-        self.nonce = data['nonce']
+        self.nonce = response['nonce']
+
+        return response
+        
 
     def get_user_data(self, dataType, kwargs={}):
         """"""
@@ -426,14 +435,17 @@ class LoopringV3AmmSampleClient(RestClient):
         # print(f"on_get_apiKey get response: {data}")
         self.api_key = data["apiKey"]
 
-    def query_balance(self):
+    def query_balance(self, tokenIds=None):
         """"""
+
+        if tokenIds == None:
+            tokenIds = self.tokenIds.values()
 
         data = {"security": Security.API_KEY}
 
         param = {
             "accountId": self.accountId,
-            "tokens": ','.join([str(token) for token in self.tokenIds.values()])
+            "tokens": ','.join([str(token) for token in tokenIds])
         }
 
         return self.perform_request(
@@ -484,7 +496,7 @@ class LoopringV3AmmSampleClient(RestClient):
                 "tokenId" : 0,
                 "volume"  : "0"
             },
-            'validUntil': 1700000000,
+            'validUntil': int(time()) + 60 * 60 * 24 * 60,
             'nonce': self.nonce
         }
         updateAccountReq = self._create_update_request(req)
@@ -517,7 +529,7 @@ class LoopringV3AmmSampleClient(RestClient):
                 "tokenId" : 0,
                 "volume"  : "4000000000000000"
             },
-            'validUntil': 1700000000,
+            'validUntil': int(time()) + 60 * 60 * 24 * 60,
             'nonce': self.nonce
         }
         updateAccountReq = self._create_update_request(req)
@@ -708,7 +720,7 @@ class LoopringV3AmmSampleClient(RestClient):
             storageId = self.offchainId[tokenId]
             self.offchainId[tokenId] += 2
 
-        feeAmount = self._getWithdawalFee(token, feeToken, fastWithdrawalMode=fastWithdrawalMode)
+        feeAmount = self._getWithdawalFee(token, feeToken, amount, fastWithdrawalMode=fastWithdrawalMode)
 
         return {
             "exchange": self.exchange,
@@ -720,7 +732,7 @@ class LoopringV3AmmSampleClient(RestClient):
             },
             "maxFee" : {
                 "tokenId": self.tokenIds[feeToken],
-                "volume": feeAmount
+                "volume": str(int(float(feeAmount)))
             },
             "to": self.address,
             "onChainDataHash": "0x" + bytes.hex(onchainDataHash),
@@ -731,10 +743,15 @@ class LoopringV3AmmSampleClient(RestClient):
             "fastWithdrawalMode": fastWithdrawalMode
         }
 
-    def _getWithdawalFee(self, token, feeToken, fastWithdrawalMode=False):
+    def _getWithdawalFee(self, token, feeToken, amount, fastWithdrawalMode=False):
 
         type = 4 if fastWithdrawalMode else 1
-        response = self.get_user_data('offchainFee', kwargs={'requestType': type, 'tokenSymbol': token, 'amount': 100})
+        response = self.get_user_data(
+            'offchainFee', kwargs={'requestType': type, 'tokenSymbol': token, 'amount': amount})
+
+        # import pprint
+        # pp = pprint.PrettyPrinter()
+        # pp.pprint(response)
 
         for d in response['fees']:
             if d['token'] == feeToken:
@@ -750,6 +767,10 @@ class LoopringV3AmmSampleClient(RestClient):
             "Content-Type": "application/json",
         }
         data.update(order)
+
+        # print('Request:')
+        # self.pp.pprint(order)
+
         return self.perform_request(
             method="POST",
             path="/api/v3/order",
@@ -792,7 +813,7 @@ class LoopringV3AmmSampleClient(RestClient):
                 "tokenId": tokenBId,
                 "volume": str(amountB)
             },
-            "validUntil"    : 1700000000,
+            "validUntil"    : int(time()) + 60 * 60 * 24 * 60,
             "maxFeeBips"    : 50,
             "fillAmountBOrS": buy,
             # "taker"         : "0000000000000000000000000000000000000000",
@@ -809,6 +830,7 @@ class LoopringV3AmmSampleClient(RestClient):
             order["poolAddress"] = ammPoolAddress
             order["orderType"]   = "AMM"
             order["fillAmountBOrS"] = False
+            order['tradeChannel'] = 'AMM_POOL' # Don't use the MIXED channel for AMM orders.
 
         signer = OrderEddsaSignHelper(self.eddsaKey)
         msgHash = signer.hash(order)
@@ -889,7 +911,7 @@ class LoopringV3AmmSampleClient(RestClient):
                 }
             },
             'storageIds': [self.offchainId[tokenAId], self.offchainId[tokenBId]] if storageIds is None else storageIds,
-            'validUntil': 1700000000
+            'validUntil': int(time()) + 60 * 60 * 24 * 60
         }
 
         if storageIds is None:
@@ -953,7 +975,7 @@ class LoopringV3AmmSampleClient(RestClient):
             },
             'storageId': self.offchainId[poolTokenId],
             'maxFee': str(int(int(exitMinAmounts[1])*0.002)),
-            'validUntil': 1700000000
+            'validUntil': int(time()) + 60 * 60 * 24 * 60
         }
         self.offchainId[poolTokenId]+=2
         return req
