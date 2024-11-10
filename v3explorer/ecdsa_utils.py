@@ -1,6 +1,5 @@
 import eip712_structs
 from eip712_structs import EIP712Struct, Address, Array, Boolean, Bytes, Int, String, Uint
-from eth_abi import encode_single, encode_abi
 from py_eth_sig_utils import utils as sig_utils
 from web3 import Web3
 from ethsnarks.jubjub import Point
